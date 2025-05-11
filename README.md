@@ -4,7 +4,7 @@ This project implements a deep learning approach for credit card fraud detection
 Project Structure :
 
 
-credit-card-fraud-detection/
+credit-card-fraud-detection-System/
 │
 ├── execute.py                 # Main execution script
 │
