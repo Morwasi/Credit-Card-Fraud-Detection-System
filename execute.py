@@ -1,149 +1,103 @@
 #!/usr/bin/env python3
-
 # -*- coding: utf-8 -*-
-
 """
 Execute file for Credit Card Fraud Detection Project.
-This script first runs the preprocessing step to download and prepare the data,
-then trains and evaluates the CNN model.
+This script runs the DNN model using 5-fold cross-validation on the original imbalanced dataset,
+training on 4 folds and testing on 1 fold, averaging results across folds, and generating visualizations.
 """
-
+import sys
 import os
+# Add the project root directory to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 import numpy as np
-import time
 from pathlib import Path
-
-# Import preprocessing module
-from preprocess_data.preprocess import CreditCardFraudPreprocessor
-
-# Import CNN model module
-from model.cnn_model import CreditCardFraudCNN
+from sklearn.model_selection import StratifiedKFold
+from imblearn.over_sampling import SMOTE
+from model.dnn_model import CreditCardFraudDNN
+from preprocessing.preprocess import CreditCardFraudPreprocessor
 
 # Set the paths
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = BASE_DIR / "data"
-OUTPUT_DIR = BASE_DIR / "outputs"
-PREPROCESSED_DATA_DIR = OUTPUT_DIR / "preprocessed_data"
-
-# Create necessary directories
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(PREPROCESSED_DATA_DIR, exist_ok=True)
-
-def save_preprocessed_data(X_train, X_test, y_train, y_test):
-    """Save preprocessed data to files"""
-    print("\nSaving preprocessed data...")
-    np.save(PREPROCESSED_DATA_DIR / "X_train.npy", X_train)
-    np.save(PREPROCESSED_DATA_DIR / "X_test.npy", X_test)
-    np.save(PREPROCESSED_DATA_DIR / "y_train.npy", y_train)
-    np.save(PREPROCESSED_DATA_DIR / "y_test.npy", y_test)
-    
-    with open(PREPROCESSED_DATA_DIR / "data_info.txt", "w") as f:
-        f.write(f"X_train shape: {X_train.shape}\n")
-        f.write(f"X_test shape: {X_test.shape}\n")
-        f.write(f"y_train shape: {y_train.shape}\n")
-        f.write(f"y_test shape: {y_test.shape}\n")
-        f.write(f"Class distribution in training set: {np.bincount(y_train)}\n")
-        f.write(f"Class distribution in test set: {np.bincount(y_test)}\n")
-    
-    print(f"Preprocessed data saved to {PREPROCESSED_DATA_DIR}")
-
-def load_preprocessed_data():
-    """Load preprocessed data from files"""
-    print("\nLoading preprocessed data...")
-    try:
-        X_train = np.load(PREPROCESSED_DATA_DIR / "X_train.npy")
-        X_test = np.load(PREPROCESSED_DATA_DIR / "X_test.npy")
-        y_train = np.load(PREPROCESSED_DATA_DIR / "y_train.npy")
-        y_test = np.load(PREPROCESSED_DATA_DIR / "y_test.npy")
-        
-        print(f"X_train shape: {X_train.shape}")
-        print(f"X_test shape: {X_test.shape}")
-        print(f"y_train shape: {y_train.shape}")
-        print(f"y_test shape: {y_test.shape}")
-        
-        return X_train, X_test, y_train, y_test
-    except FileNotFoundError:
-        print("Error: Preprocessed data not found at expected location.")
-        return None, None, None, None
-
-def preprocess_data(force_reprocess=False):
-    """Preprocess the credit card fraud data"""
-    if not force_reprocess and (PREPROCESSED_DATA_DIR / "X_train.npy").exists():
-        print("Preprocessed data already exists. Loading from files...")
-        return load_preprocessed_data()
-    
-    print("\n" + "="*50)
-    print("Starting data preprocessing...")
-    print("="*50)
-    
-    start_time = time.time()
-    
-    preprocessor = CreditCardFraudPreprocessor(
-        download_data=True,
-        save_plots=True
-    )
-    
-    X_train, X_test, y_train, y_test = preprocessor.preprocess()
-    save_preprocessed_data(X_train, X_test, y_train, y_test)
-    
-    print(f"Preprocessing completed in {time.time() - start_time:.2f} seconds")
-    return X_train, X_test, y_train, y_test
-
-def train_and_evaluate_cnn_model(X_train, X_test, y_train, y_test, force_retrain=False):
-    """Train and evaluate CNN model"""
-    print("\n" + "="*50)
-    print("Starting CNN model training and evaluation...")
-    print("="*50)
-    
-    # Train and evaluate Neural Network
-    nn_output_dir = OUTPUT_DIR / "cnn_model"
-    os.makedirs(nn_output_dir, exist_ok=True)
-    
-    nn_model = CreditCardFraudCNN(output_dir=str(nn_output_dir), validation_split=0.2)
-    
-    if not force_retrain and (nn_output_dir / "best_cnn_fraud_model.h5").exists():
-        print(f"Loading existing CNN model from {nn_output_dir}")
-        nn_model.load_model("best_cnn_fraud_model.h5")
-    else:
-        print("Training CNN model...")
-        nn_model.train_model(X_train, y_train, epochs=100, batch_size=32, verbose=1)
-        nn_model.plot_training_history()
-    
-    print("\nEvaluating CNN model...")
-    nn_metrics = nn_model.evaluate_model(X_test, y_test)
-    
-    return nn_model, nn_metrics
+OUTPUT_DIR = BASE_DIR.parent / "outputs"
+DNN_OUTPUT_DIR = OUTPUT_DIR / "dnn_model"
 
 def main():
     """Main execution function"""
     print("\n" + "="*70)
-    print("CREDIT CARD FRAUD DETECTION - WITH PREPROCESSING")
+    print("CREDIT CARD FRAUD DETECTION - DNN MODEL WITH 5-FOLD CROSS-VALIDATION")
     print("="*70)
     
-    # First, preprocess the data (or load if already preprocessed)
-    X_train, X_test, y_train, y_test = preprocess_data(force_reprocess=False)
+    # Load and preprocess data
+    print("\nLoading and preprocessing data...")
+    preprocessor = CreditCardFraudPreprocessor(download_data=True)
+    X, y = preprocessor.preprocess()
     
-    if X_train is None:
-        print("Error: Could not get preprocessed data. Exiting.")
-        return
+    # Initialize 5-fold cross-validation
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     
-    # Train and evaluate CNN model
-    nn_model, nn_metrics = train_and_evaluate_cnn_model(
-        X_train, X_test, y_train, y_test, force_retrain=False
-    )
+    # Lists to store metrics across folds
+    metrics = {
+        'accuracy': [],
+        'precision': [],
+        'recall': [],
+        'f1_score': [],
+        'roc_auc': [],
+        'pr_auc': [],
+        'tp': [],
+        'fp': [],
+        'fn': [],
+        'tn': [],
+        'tpr': [],
+        'fpr': [],
+        'tnr': [],
+        'fnr': [],
+        'best_threshold': []
+    }
     
-    # Print final evaluation metrics
-    print("\n" + "="*50)
-    print("CNN MODEL PERFORMANCE")
-    print("="*50)
+    # Perform 5-fold cross-validation
+    fold = 1
+    for train_index, test_index in skf.split(X, y):
+        print(f"\n{'='*50}")
+        print(f"Fold {fold}")
+        print(f"{'='*50}")
+        
+        # Split data
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+        
+        print(f"Training set size: {X_train.shape[0]} samples")
+        print(f"Testing set size: {X_test.shape[0]} samples")
+        print(f"Fraud cases in test set: {sum(y_test)}")
+        
+        # Apply SMOTE to training data
+        smote = SMOTE(random_state=42)
+        X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+        print(f"After SMOTE, training set size: {X_train_smote.shape[0]} samples")
+        print(f"Class distribution after SMOTE: {np.bincount(y_train_smote)}")
+        
+        # Initialize and train model
+        nn_model = CreditCardFraudDNN(output_dir=str(DNN_OUTPUT_DIR), validation_split=0.2)
+        nn_model.train_model(X_train_smote, y_train_smote, epochs=100, batch_size=32, verbose=1)
+        
+        # Evaluate model
+        fold_metrics = nn_model.evaluate_model(X_test, y_test, fold=fold)
+        
+        # Store metrics
+        for key in metrics:
+            metrics[key].append(fold_metrics[key])
+        
+        fold += 1
     
-    print(f"Accuracy:  {nn_metrics['accuracy']:.4f}")
-    print(f"Precision: {nn_metrics['precision']:.4f}")
-    print(f"Recall:    {nn_metrics['recall']:.4f}")
-    print(f"F1 Score:  {nn_metrics['f1_score']:.4f}")
-    print(f"ROC AUC:   {nn_metrics['roc_auc']:.4f}")
-    print(f"PR AUC:    {nn_metrics['pr_auc']:.4f}")
+    # Calculate and print average metrics
+    print("\n" + "="*70)
+    print("AVERAGE PERFORMANCE ACROSS 5 FOLDS")
+    print("="*70)
+    for key in metrics:
+        avg = np.mean(metrics[key])
+        std = np.std(metrics[key])
+        print(f"{key.replace('_', ' ').title()}: {avg:.4f} ± {std:.4f}")
 
 if __name__ == "__main__":
     main()
